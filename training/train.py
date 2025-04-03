@@ -1,74 +1,76 @@
-# radfuse/train.py
 import os
+import yaml
 import torch
+import torch.optim as optim
 from torch.utils.data import DataLoader
-from radfuse.data.dataset import RadFuseDataset
-from radfuse.model.model import RadFuseModel
-from radfuse.utils.utils import set_seed
-from transformers import AdamW
 
+from models.radfuse_model import RadFuseModel
+from data.mimiccxr_preprocessing import MIMICDataset
+from training.losses import MultiLabelBCELoss, ContrastiveInfoNCELoss
+from training.utils import set_seed, save_checkpoint
 
-def train(args):
-    set_seed(args.seed)
+def load_config(config_path):
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
-    print("[INFO] Loading dataset...")
-    train_set = RadFuseDataset(args.data_dir, split='train')
-    val_set = RadFuseDataset(args.data_dir, split='val')
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
+def train(config):
 
-    print("[INFO] Initializing model...")
-    model = RadFuseModel()
-    model.to(args.device)
+    # Set seed for reproducibility
+    set_seed(42)
 
-    optimizer = AdamW(model.parameters(), lr=args.lr)
-    loss_fn_cls = torch.nn.BCELoss()
-    best_auc = 0.0
+    # Device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    print("[INFO] Starting training...")
-    for epoch in range(args.epochs):
+    # Dataset and Dataloader
+    train_dataset = MIMICDataset(
+        image_dir=config['data']['image_path'],
+        report_dir=config['data']['report_path'],
+        mode='train'
+    )
+    train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True)
+
+    # Model
+    model = RadFuseModel(config['model']).to(device)
+
+    # Losses
+    classification_loss = MultiLabelBCELoss()
+    contrastive_loss = ContrastiveInfoNCELoss()
+
+    # Optimizer
+    optimizer = optim.Adam(model.parameters(), lr=config['training']['lr'])
+
+    # Training Loop
+    for epoch in range(config['training']['epochs']):
         model.train()
-        total_loss = 0.0
+        epoch_cls_loss = 0
+        epoch_ctr_loss = 0
+
         for batch in train_loader:
-            images, reports, labels = batch
-            images, reports, labels = images.to(args.device), reports.to(args.device), labels.to(args.device)
-            logits, _ = model(images, reports)
-            loss = loss_fn_cls(logits, labels.float())
+            images = batch['image'].to(device)
+            reports = batch['report'].to(device)
+            labels = batch['labels'].to(device)
 
             optimizer.zero_grad()
+            logits, img_embeds, txt_embeds = model(images, reports)
+
+            loss_cls = classification_loss(logits, labels)
+            loss_ctr = contrastive_loss(img_embeds, txt_embeds)
+            loss = loss_cls + loss_ctr
+
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
+            epoch_cls_loss += loss_cls.item()
+            epoch_ctr_loss += loss_ctr.item()
 
-        print(f"Epoch {epoch+1}: Train Loss = {total_loss / len(train_loader):.4f}")
+        print(f"[Epoch {epoch+1}] Classification Loss: {epoch_cls_loss:.4f} | Contrastive Loss: {epoch_ctr_loss:.4f}")
+        save_checkpoint(model, optimizer, epoch, f"checkpoints/radfuse_epoch_{epoch+1}.pth")
 
-        # validation
-        model.eval()
-        with torch.no_grad():
-            all_preds, all_labels = [], []
-            for batch in val_loader:
-                images, reports, labels = batch
-                images, reports = images.to(args.device), reports.to(args.device)
-                logits, _ = model(images, reports)
-                all_preds.append(torch.sigmoid(logits).cpu())
-                all_labels.append(labels)
-
-        # you can integrate sklearn.metrics.roc_auc_score, etc.
-        print(f"[INFO] Finished Epoch {epoch+1}")
-
-    print("[INFO] Training completed.")
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='data/')
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--epochs', type=int, default=10)
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--config', type=str, default='config/default.yaml')
     args = parser.parse_args()
 
-    train(args)
+    config = load_config(args.config)
+    train(config)
