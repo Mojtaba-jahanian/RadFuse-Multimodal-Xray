@@ -1,8 +1,8 @@
-torch
-transformers
-tqdm
+torch>=1.13.0
+transformers>=4.30
 scikit-learn
-pandas
 numpy
+pandas
+tqdm
 matplotlib
-seaborn
+pyyaml
