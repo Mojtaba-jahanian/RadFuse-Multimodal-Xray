@@ -1,14 +1,39 @@
 model:
-  image_encoder: vit
-  text_encoder: clinicalbert
-  fusion: cross_attention
+  image_encoder: vit                # Options: vit, resnet
+  text_encoder: clinicalbert        # Options: clinicalbert, biobert
+  fusion: cross_attention           # Options: cross_attention, late_fusion, concat
+  embedding_dim: 768
 
 training:
   batch_size: 16
   epochs: 10
   lr: 0.0001
+  optimizer: adam                   # Options: adam, sgd
+  weight_decay: 0.01
+  warmup_steps: 500
+  use_amp: true                     # Automatic Mixed Precision (NVIDIA GPUs)
+  save_checkpoint: true
+  checkpoint_dir: checkpoints/
 
 data:
   dataset: MIMIC-CXR
-  image_path: /path/to/images
-  report_path: /path/to/reports
+  image_path: data/images           # Path to preprocessed chest X-ray images
+  report_path: data/reports         # Path to aligned free-text reports
+  max_seq_len: 256                  # Max token length for ClinicalBERT
+  image_size: 224                   # Resize images to this resolution
+
+loss:
+  contrastive_temperature: 0.07
+  cls_weight: 1.0
+  retrieval_weight: 0.5
+
+evaluation:
+  eval_batch_size: 32
+  metrics: [auc, f1, recall@10, mrr]
+  visualize_attention: true
+  save_results_path: results/
+
+logging:
+  log_interval: 10
+  log_dir: logs/
+  use_wandb: false                  # Set true if you use Weights & Biases
